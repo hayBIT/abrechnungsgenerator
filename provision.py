@@ -312,6 +312,145 @@ def write_ods(
         archive.writestr("META-INF/manifest.xml", manifest_xml, compress_type=zipfile.ZIP_DEFLATED)
 
 
+def _pdf_escape(text: str) -> str:
+    escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    return escaped.encode("cp1252", errors="replace").decode("cp1252")
+
+
+def _format_pdf_cell(value: str, width: int, align_right: bool = False) -> str:
+    trimmed = value.strip()
+    if len(trimmed) > width:
+        return trimmed[: max(0, width - 1)] + "…"
+    if align_right:
+        return trimmed.rjust(width)
+    return trimmed.ljust(width)
+
+
+def write_pdf(
+    path: Path,
+    title: str,
+    fieldnames: List[str],
+    rows: List[Dict[str, str]],
+) -> None:
+    page_width = 842
+    page_height = 595
+    margin_x = 40
+    margin_y = 40
+    font_size = 10
+    line_height = 12
+    lines_per_page = int((page_height - 2 * margin_y) / line_height)
+
+    column_widths = [12, 16, 16, 12, 10, 10, 10]
+    if len(fieldnames) != len(column_widths):
+        column_widths = [max(8, 80 // max(1, len(fieldnames)))] * len(fieldnames)
+
+    header_line = " | ".join(
+        _format_pdf_cell(name, width) for name, width in zip(fieldnames, column_widths)
+    )
+    separator_line = "-+-".join("-" * width for width in column_widths)
+
+    def row_line(row: Dict[str, str]) -> str:
+        return " | ".join(
+            _format_pdf_cell(
+                str(row.get(name, "")),
+                width,
+                align_right=name == "Betrag",
+            )
+            for name, width in zip(fieldnames, column_widths)
+        )
+
+    data_lines = [row_line(row) for row in rows]
+
+    pages: List[List[str]] = []
+    current: List[str] = []
+    for line in data_lines:
+        if len(current) >= lines_per_page - 4:
+            pages.append(current)
+            current = []
+        current.append(line)
+    if current:
+        pages.append(current)
+
+    contents: List[str] = []
+    for page_index, page_lines in enumerate(pages, start=1):
+        lines: List[str] = []
+        lines.append(title if len(pages) == 1 else f"{title} (Seite {page_index}/{len(pages)})")
+        lines.append("")
+        lines.append(header_line)
+        lines.append(separator_line)
+        lines.extend(page_lines)
+        text_lines = [f"({_pdf_escape(line)}) Tj T*" for line in lines]
+        text_stream = "\n".join(
+            [
+                "BT",
+                f"/F1 {font_size} Tf",
+                f"{margin_x} {page_height - margin_y} Td",
+                f"{line_height} TL",
+                *text_lines,
+                "ET",
+            ]
+        )
+        contents.append(text_stream)
+
+    objects: List[bytes] = []
+
+    def add_object(data: str) -> int:
+        objects.append(data.encode("cp1252"))
+        return len(objects)
+
+    font_obj = add_object(
+        "<< /Type /Font /Subtype /Type1 /Name /F1 /BaseFont /Courier "
+        "/Encoding /WinAnsiEncoding >>"
+    )
+
+    content_obj_ids: List[int] = []
+    for stream in contents:
+        stream_bytes = stream.encode("cp1252")
+        content_obj_ids.append(
+            add_object(f"<< /Length {len(stream_bytes)} >>\nstream\n{stream}\nendstream")
+        )
+
+    pages_obj_id = add_object("<< /Type /Pages /Kids [] /Count 0 >>")
+
+    page_obj_ids: List[int] = []
+    for content_obj_id in content_obj_ids:
+        page_obj_ids.append(
+            add_object(
+                f"<< /Type /Page /Parent {pages_obj_id} 0 R /MediaBox [0 0 {page_width} {page_height}] "
+                f"/Resources << /Font << /F1 {font_obj} 0 R >> >> "
+                f"/Contents {content_obj_id} 0 R >>"
+            )
+        )
+
+    pages_kids = " ".join(f"{page_id} 0 R" for page_id in page_obj_ids)
+    objects[pages_obj_id - 1] = (
+        f"<< /Type /Pages /Kids [{pages_kids}] /Count {len(page_obj_ids)} >>"
+    ).encode("cp1252")
+    catalog_obj = add_object(f"<< /Type /Catalog /Pages {pages_obj_id} 0 R >>")
+
+    xref_positions = []
+    pdf_parts = [b"%PDF-1.4\n"]
+    for idx, obj in enumerate(objects, start=1):
+        xref_positions.append(sum(len(part) for part in pdf_parts))
+        pdf_parts.append(f"{idx} 0 obj\n".encode("cp1252"))
+        pdf_parts.append(obj)
+        pdf_parts.append(b"\nendobj\n")
+    xref_start = sum(len(part) for part in pdf_parts)
+    xref_entries = ["0000000000 65535 f "]
+    for pos in xref_positions:
+        xref_entries.append(f"{pos:010d} 00000 n ")
+    pdf_parts.append(f"xref\n0 {len(xref_entries)}\n".encode("cp1252"))
+    pdf_parts.append("\n".join(xref_entries).encode("cp1252"))
+    pdf_parts.append(
+        f"\ntrailer\n<< /Size {len(xref_entries)} /Root {catalog_obj} 0 R >>\nstartxref\n{xref_start}\n%%EOF\n".encode(
+            "cp1252"
+        )
+    )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"".join(pdf_parts))
+
+
 def format_amount_eur(value: str) -> str:
     cleaned = value.strip()
     if not cleaned:
@@ -635,7 +774,7 @@ def main() -> None:
         vermittler_info = vermittler_map.get(vmt, {})
         vermittler_name = vermittler_info.get("Name") or ""
         name_suffix = f"_{sanitize_filename(vermittler_name)}" if vermittler_name else ""
-        filename = f"{date_prefix}_{sanitize_filename(vmt)}{name_suffix}.ods"
+        filename_base = f"{date_prefix}_{sanitize_filename(vmt)}{name_suffix}"
         ods_rows = []
         total_amount = 0.0
         has_amount = False
@@ -661,12 +800,18 @@ def main() -> None:
             total_row["Betrag"] = format_amount_display(total_amount)
             ods_rows.append(total_row)
         write_ods(
-            args.output_dir / "vmt" / filename,
+            args.output_dir / "vmt" / f"{filename_base}.ods",
             vmt,
             ods_fieldnames,
             ods_rows,
             date_fields=["Datum"],
             currency_fields=["Betrag"],
+        )
+        write_pdf(
+            args.output_dir / "vmt" / f"{filename_base}.pdf",
+            vmt,
+            ods_fieldnames,
+            ods_rows,
         )
 
 

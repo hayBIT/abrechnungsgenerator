@@ -26,6 +26,7 @@ python provision.py \
 - `output/unmatched_rows.csv`: Alle Abrechnungszeilen ohne Match aus der Ameise-Liste.
 - `output/summary_by_vmt.csv`: Zusammenfassung der Treffer nach `VMT` (inklusive `UNMATCHED`).
 - `output/vmt/<YYYYMMDD>_<VMT>[_<Name>].ods`: Je Vermittler eine ODS-Datei mit den Spalten `VSN`, `Vorname / Ansprechpartner`, `Nachname / Firma`, `Gesellschaft`, `Sparte`, `Datum`, `Betrag` (nicht für `UNMATCHED`). Wenn `--vermittlerliste` übergeben wird, wird der Betrag mit dem Provisionssatz aus der Liste berechnet und der Vermittlername in den Dateinamen aufgenommen.
+- `output/vmt/<YYYYMMDD>_<VMT>[_<Name>].pdf`: Zusätzlich zur ODS-Ausgabe wird pro Vermittler eine PDF im A4-Hochformat mit denselben Spalten erstellt.
 
 ## Hinweise
 
