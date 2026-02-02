@@ -20,6 +20,17 @@ python provision.py \
   --output-dir output
 ```
 
+## GUI
+
+Die grafische Oberfläche kann über `gui.py` gestartet werden:
+
+```bash
+python gui.py
+```
+
+Dort lassen sich alle benötigten Dateien auswählen (inklusive Mehrfachauswahl für Abrechnungen)
+und die Ausgabe wird in das gewählte Output-Verzeichnis geschrieben.
+
 ## Ausgabe
 
 - `output/matched_rows.csv`: Alle Abrechnungszeilen mit angereicherter `VSN`, `VMT`, `match_status` und `insurer`.
