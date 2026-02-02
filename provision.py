@@ -186,13 +186,64 @@ def match_insurer(
     return matched_rows, counts, missing_fields
 
 
+def match_vema(
+    path: Path, ameise_map: Dict[str, Dict[str, str]]
+) -> Tuple[List[Dict[str, str]], Counter, List[str]]:
+    rows, fieldnames = read_csv(path)
+    matched_rows: List[Dict[str, str]] = []
+    counts = Counter()
+    missing_fields: List[str] = []
+
+    required_fields = ["Vertragsnummer", "Fälligkeit", "Betrag"]
+    for field in required_fields:
+        if field not in fieldnames:
+            missing_fields.append(field)
+    if missing_fields:
+        return matched_rows, counts, missing_fields
+
+    for row in rows:
+        vsn = normalize_vsn(row.get("Vertragsnummer", ""))
+        ameise_details = ameise_map.get(vsn, {})
+        vmt = ameise_details.get("VMT", "")
+        status = "matched" if vmt else "unmatched"
+        counts[vmt or "UNMATCHED"] += 1
+        amount = format_amount_eur(row.get("Betrag", ""))
+        enriched = dict(row)
+        enriched.update(
+            {
+                "insurer": "VEMA",
+                "VSN": vsn,
+                "VMT": vmt,
+                "Vorname / Ansprechpartner": ameise_details.get("Vorname / Ansprechpartner", ""),
+                "Nachname / Firma": ameise_details.get("Nachname / Firma", ""),
+                "Gesellschaft": ameise_details.get("Gesellschaft", ""),
+                "Sparte": ameise_details.get("Sparte", ""),
+                "abrechnungsbetrag": amount,
+                "beg_wirk_dat": row.get("Fälligkeit", ""),
+                "Betrag": amount,
+                "match_status": status,
+            }
+        )
+        matched_rows.append(enriched)
+
+    return matched_rows, counts, missing_fields
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Match insurer settlement CSVs to Ameise contract list and assign sub-brokers."
+        description="Match insurer settlement CSVs to Ameise contract list and assign sub-brokers.",
+        epilog="Example: provision.py --ameise ameise.csv --kravag kravag.csv --vema vema.csv",
     )
     parser.add_argument("--ameise", required=True, type=Path, help="CSV export from Ameise CRM")
     parser.add_argument("--kravag", type=Path, nargs="*", default=[], help="KRAVAG settlement CSVs")
     parser.add_argument("--rv", type=Path, nargs="*", default=[], help="R+V settlement CSVs")
+    parser.add_argument(
+        "--vema",
+        type=Path,
+        nargs="*",
+        default=[],
+        help="VEMA settlement CSVs (optional)",
+    )
     parser.add_argument(
         "--output-dir", type=Path, default=Path("output"), help="Directory for outputs"
     )
@@ -228,6 +279,16 @@ def main() -> None:
                     if field not in missing_columns[insurer]:
                         missing_columns[insurer].append(field)
 
+    for path in args.vema:
+        matched, counts, missing_fields = match_vema(path, ameise_map)
+        all_rows.extend(matched)
+        summary.update(counts)
+        if missing_fields:
+            missing_columns.setdefault("VEMA", [])
+            for field in missing_fields:
+                if field not in missing_columns["VEMA"]:
+                    missing_columns["VEMA"].append(field)
+
     if missing_columns:
         for insurer, fields in missing_columns.items():
             missing = ", ".join(fields)
@@ -236,7 +297,11 @@ def main() -> None:
     if not all_rows:
         raise SystemExit("No insurer rows processed. Provide at least one settlement CSV.")
 
-    fieldnames = list(all_rows[0].keys())
+    fieldnames: List[str] = []
+    for row in all_rows:
+        for key in row.keys():
+            if key not in fieldnames:
+                fieldnames.append(key)
     write_csv(args.output_dir / "matched_rows.csv", fieldnames, all_rows)
 
     summary_rows = [
