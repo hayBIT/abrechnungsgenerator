@@ -6,6 +6,7 @@ import zipfile
 from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
+from xml.etree import ElementTree
 from xml.sax.saxutils import escape
 
 
@@ -50,6 +51,81 @@ def read_csv(path: Path) -> Tuple[List[Dict[str, str]], List[str]]:
         reader = csv.DictReader(handle, dialect=dialect)
         rows = [row for row in reader]
     return rows, reader.fieldnames or []
+
+
+def _xlsx_column_index(cell_ref: str) -> int:
+    letters = ""
+    for char in cell_ref:
+        if char.isalpha():
+            letters += char.upper()
+        else:
+            break
+    index = 0
+    for char in letters:
+        index = index * 26 + (ord(char) - ord("A") + 1)
+    return index - 1
+
+
+def _xlsx_text(element: ElementTree.Element) -> str:
+    if element is None:
+        return ""
+    if element.text:
+        return element.text
+    return "".join(child.text or "" for child in element.findall(".//{*}t"))
+
+
+def read_xlsx(path: Path) -> Tuple[List[Dict[str, str]], List[str]]:
+    shared_strings: List[str] = []
+    with zipfile.ZipFile(path) as archive:
+        if "xl/sharedStrings.xml" in archive.namelist():
+            shared_tree = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
+            for shared in shared_tree.findall(".//{*}si"):
+                shared_strings.append(_xlsx_text(shared))
+
+        sheet_path = "xl/worksheets/sheet1.xml"
+        if "xl/workbook.xml" in archive.namelist() and "xl/_rels/workbook.xml.rels" in archive.namelist():
+            workbook_tree = ElementTree.fromstring(archive.read("xl/workbook.xml"))
+            rels_tree = ElementTree.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+            sheet = workbook_tree.find(".//{*}sheet")
+            if sheet is not None:
+                rel_id = sheet.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")
+                if rel_id:
+                    rel = rels_tree.find(f".//{{*}}Relationship[@Id='{rel_id}']")
+                    if rel is not None:
+                        target = rel.attrib.get("Target", "")
+                        if target:
+                            sheet_path = target.lstrip("/")
+                            if not sheet_path.startswith("xl/"):
+                                sheet_path = f"xl/{sheet_path}"
+
+        sheet_tree = ElementTree.fromstring(archive.read(sheet_path))
+
+    rows: List[Dict[str, str]] = []
+    headers: List[str] = []
+    for row in sheet_tree.findall(".//{*}sheetData/{*}row"):
+        values: Dict[int, str] = {}
+        for cell in row.findall("{*}c"):
+            cell_ref = cell.attrib.get("r", "")
+            index = _xlsx_column_index(cell_ref)
+            cell_type = cell.attrib.get("t")
+            raw_value = _xlsx_text(cell.find("{*}v")) if cell_type != "inlineStr" else _xlsx_text(cell)
+            if cell_type == "s":
+                try:
+                    value = shared_strings[int(raw_value)]
+                except (ValueError, IndexError):
+                    value = raw_value
+            else:
+                value = raw_value
+            values[index] = value or ""
+        if not headers:
+            max_index = max(values.keys(), default=-1)
+            headers = [values.get(idx, "").strip() for idx in range(max_index + 1)]
+            continue
+        if not headers:
+            continue
+        row_dict = {headers[idx]: values.get(idx, "").strip() for idx in range(len(headers))}
+        rows.append(row_dict)
+    return rows, headers
 
 
 def write_csv(path: Path, fieldnames: Iterable[str], rows: Iterable[Dict[str, str]]) -> None:
@@ -229,6 +305,49 @@ def match_vema(
     return matched_rows, counts, missing_fields
 
 
+def match_fonds_finanz(
+    path: Path, ameise_map: Dict[str, Dict[str, str]]
+) -> Tuple[List[Dict[str, str]], Counter, List[str]]:
+    rows, fieldnames = read_xlsx(path)
+    matched_rows: List[Dict[str, str]] = []
+    counts = Counter()
+    missing_fields: List[str] = []
+
+    required_fields = ["Abrechnungsdatum", "Vertragsnummer extern", "Summe in EUR"]
+    for field in required_fields:
+        if field not in fieldnames:
+            missing_fields.append(field)
+    if missing_fields:
+        return matched_rows, counts, missing_fields
+
+    for row in rows:
+        vsn = normalize_vsn(row.get("Vertragsnummer extern", ""))
+        ameise_details = ameise_map.get(vsn, {})
+        vmt = ameise_details.get("VMT", "")
+        status = "matched" if vmt else "unmatched"
+        counts[vmt or "UNMATCHED"] += 1
+        amount = format_amount_eur(row.get("Summe in EUR", ""))
+        enriched = dict(row)
+        enriched.update(
+            {
+                "insurer": "Fonds Finanz",
+                "VSN": vsn,
+                "VMT": vmt,
+                "Vorname / Ansprechpartner": ameise_details.get("Vorname / Ansprechpartner", ""),
+                "Nachname / Firma": ameise_details.get("Nachname / Firma", ""),
+                "Gesellschaft": ameise_details.get("Gesellschaft", ""),
+                "Sparte": ameise_details.get("Sparte", ""),
+                "abrechnungsbetrag": amount,
+                "beg_wirk_dat": row.get("Abrechnungsdatum", ""),
+                "Summe in EUR": amount,
+                "match_status": status,
+            }
+        )
+        matched_rows.append(enriched)
+
+    return matched_rows, counts, missing_fields
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Match insurer settlement CSVs to Ameise contract list and assign sub-brokers.",
@@ -243,6 +362,13 @@ def parse_args() -> argparse.Namespace:
         nargs="*",
         default=[],
         help="VEMA settlement CSVs (optional)",
+    )
+    parser.add_argument(
+        "--ff",
+        type=Path,
+        nargs="*",
+        default=[],
+        help="Fonds Finanz settlement XLSX files (optional)",
     )
     parser.add_argument(
         "--output-dir", type=Path, default=Path("output"), help="Directory for outputs"
@@ -289,10 +415,20 @@ def main() -> None:
                 if field not in missing_columns["VEMA"]:
                     missing_columns["VEMA"].append(field)
 
+    for path in args.ff:
+        matched, counts, missing_fields = match_fonds_finanz(path, ameise_map)
+        all_rows.extend(matched)
+        summary.update(counts)
+        if missing_fields:
+            missing_columns.setdefault("FF", [])
+            for field in missing_fields:
+                if field not in missing_columns["FF"]:
+                    missing_columns["FF"].append(field)
+
     if missing_columns:
         for insurer, fields in missing_columns.items():
             missing = ", ".join(fields)
-            raise SystemExit(f"Missing required columns in {insurer} CSV: {missing}")
+            raise SystemExit(f"Missing required columns in {insurer} file: {missing}")
 
     if not all_rows:
         raise SystemExit("No insurer rows processed. Provide at least one settlement CSV.")
