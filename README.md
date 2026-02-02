@@ -16,6 +16,7 @@ python provision.py \
   --rv path/to/rv_1.csv path/to/rv_2.csv \
   --vema path/to/vema_1.csv \
   --ff path/to/fonds_finanz.xlsx \
+  --vermittlerliste path/to/vermittlerliste.csv \
   --output-dir output
 ```
 
@@ -24,7 +25,7 @@ python provision.py \
 - `output/matched_rows.csv`: Alle Abrechnungszeilen mit angereicherter `VSN`, `VMT`, `match_status` und `insurer`.
 - `output/unmatched_rows.csv`: Alle Abrechnungszeilen ohne Match aus der Ameise-Liste.
 - `output/summary_by_vmt.csv`: Zusammenfassung der Treffer nach `VMT` (inklusive `UNMATCHED`).
-- `output/vmt/<VMT>.ods`: Je Vermittler eine ODS-Datei mit den Spalten `VSN`, `Vorname / Ansprechpartner`, `Nachname / Firma`, `Gesellschaft`, `Sparte`, `Datum`, `Betrag` (nicht für `UNMATCHED`).
+- `output/vmt/<YYYYMMDD>_<VMT>[_<Name>].ods`: Je Vermittler eine ODS-Datei mit den Spalten `VSN`, `Vorname / Ansprechpartner`, `Nachname / Firma`, `Gesellschaft`, `Sparte`, `Datum`, `Betrag` (nicht für `UNMATCHED`). Wenn `--vermittlerliste` übergeben wird, wird der Betrag mit dem Provisionssatz aus der Liste berechnet und der Vermittlername in den Dateinamen aufgenommen.
 
 ## Hinweise
 

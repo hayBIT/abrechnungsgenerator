@@ -154,6 +154,40 @@ def load_ameise(path: Path) -> Dict[str, Dict[str, str]]:
     return mapping
 
 
+def parse_rate(value: str) -> float | None:
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    cleaned = cleaned.replace("%", "").replace("\u00a0", "").replace(" ", "")
+    if cleaned.count(",") == 1 and "." in cleaned:
+        cleaned = cleaned.replace(".", "").replace(",", ".")
+    elif cleaned.count(",") == 1 and "." not in cleaned:
+        cleaned = cleaned.replace(",", ".")
+    try:
+        rate = float(cleaned)
+    except ValueError:
+        return None
+    if rate > 1:
+        return rate / 100
+    return rate
+
+
+def load_vermittlerliste(
+    path: Path,
+) -> Dict[str, Dict[str, str | float | None]]:
+    rows, _ = read_csv(path)
+    mapping: Dict[str, Dict[str, str | float | None]] = {}
+    for row in rows:
+        vmt = row.get("VMT", "").strip()
+        if not vmt:
+            continue
+        mapping[vmt] = {
+            "Name": row.get("Name", "").strip(),
+            "Provisionssatz": parse_rate(row.get("Provisionssatz", "")),
+        }
+    return mapping
+
+
 def sanitize_filename(value: str) -> str:
     cleaned = re.sub(r"[^\w\.-]+", "_", value.strip(), flags=re.UNICODE)
     return cleaned or "UNMATCHED"
@@ -503,6 +537,11 @@ def parse_args() -> argparse.Namespace:
         help="Fonds Finanz settlement XLSX files (optional)",
     )
     parser.add_argument(
+        "--vermittlerliste",
+        type=Path,
+        help="Optional Vermittlerliste with columns VMT, Name, Provisionssatz",
+    )
+    parser.add_argument(
         "--output-dir", type=Path, default=Path("output"), help="Directory for outputs"
     )
     return parser.parse_args()
@@ -511,6 +550,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     ameise_map = load_ameise(args.ameise)
+    vermittler_map = load_vermittlerliste(args.vermittlerliste) if args.vermittlerliste else {}
+    date_prefix = datetime.now().strftime("%Y%m%d")
 
     ods_fieldnames = [
         "VSN",
@@ -591,13 +632,22 @@ def main() -> None:
     for vmt, rows in rows_by_vmt.items():
         if vmt == "UNMATCHED":
             continue
-        filename = f"{sanitize_filename(vmt)}.ods"
+        vermittler_info = vermittler_map.get(vmt, {})
+        vermittler_name = vermittler_info.get("Name") or ""
+        name_suffix = f"_{sanitize_filename(vermittler_name)}" if vermittler_name else ""
+        filename = f"{date_prefix}_{sanitize_filename(vmt)}{name_suffix}.ods"
         ods_rows = []
         for row in rows:
             ods_row = dict(row)
             date_display, _ = normalize_date(row.get("beg_wirk_dat", ""))
             ods_row["Datum"] = date_display or row.get("beg_wirk_dat", "")
-            ods_row["Betrag"] = row.get("abrechnungsbetrag", "")
+            amount = parse_amount_eur(row.get("abrechnungsbetrag", ""))
+            provision_rate = vermittler_info.get("Provisionssatz")
+            if amount is not None and isinstance(provision_rate, float):
+                amount *= provision_rate
+                ods_row["Betrag"] = format_amount_display(amount)
+            else:
+                ods_row["Betrag"] = row.get("abrechnungsbetrag", "")
             ods_rows.append(ods_row)
         write_ods(
             args.output_dir / "vmt" / filename,
