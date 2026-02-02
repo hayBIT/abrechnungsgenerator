@@ -303,12 +303,17 @@ def main() -> None:
             if key not in fieldnames:
                 fieldnames.append(key)
     write_csv(args.output_dir / "matched_rows.csv", fieldnames, all_rows)
+    unmatched_rows = [row for row in all_rows if row.get("match_status") == "unmatched"]
+    write_csv(args.output_dir / "unmatched_rows.csv", fieldnames, unmatched_rows)
 
     summary_rows = [
         {"VMT": vmt, "count": str(count)}
         for vmt, count in sorted(summary.items(), key=lambda item: item[0])
     ]
     write_csv(args.output_dir / "summary_by_vmt.csv", ["VMT", "count"], summary_rows)
+    unmatched_ods = args.output_dir / "vmt" / f"{sanitize_filename('UNMATCHED')}.ods"
+    if unmatched_ods.exists():
+        unmatched_ods.unlink()
 
     rows_by_vmt: Dict[str, List[Dict[str, str]]] = {}
     for row in all_rows:
@@ -316,6 +321,8 @@ def main() -> None:
         rows_by_vmt.setdefault(vmt, []).append(row)
 
     for vmt, rows in rows_by_vmt.items():
+        if vmt == "UNMATCHED":
+            continue
         filename = f"{sanitize_filename(vmt)}.ods"
         ods_rows = []
         for row in rows:

@@ -21,8 +21,9 @@ python provision.py \
 ## Ausgabe
 
 - `output/matched_rows.csv`: Alle Abrechnungszeilen mit angereicherter `VSN`, `VMT`, `match_status` und `insurer`.
+- `output/unmatched_rows.csv`: Alle Abrechnungszeilen ohne Match aus der Ameise-Liste.
 - `output/summary_by_vmt.csv`: Zusammenfassung der Treffer nach `VMT` (inklusive `UNMATCHED`).
-- `output/vmt/<VMT>.ods`: Je Vermittler eine ODS-Datei mit den Spalten `VSN`, `Vorname / Ansprechpartner`, `Nachname / Firma`, `Gesellschaft`, `Sparte`, `Datum`, `Betrag`.
+- `output/vmt/<VMT>.ods`: Je Vermittler eine ODS-Datei mit den Spalten `VSN`, `Vorname / Ansprechpartner`, `Nachname / Firma`, `Gesellschaft`, `Sparte`, `Datum`, `Betrag` (nicht für `UNMATCHED`).
 
 ## Hinweise
 
