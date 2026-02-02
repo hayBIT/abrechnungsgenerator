@@ -686,10 +686,17 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    ameise_map = load_ameise(args.ameise)
-    vermittler_map = load_vermittlerliste(args.vermittlerliste) if args.vermittlerliste else {}
+def run_provision(
+    ameise: Path,
+    kravag: Iterable[Path],
+    rv: Iterable[Path],
+    vema: Iterable[Path],
+    ff: Iterable[Path],
+    vermittlerliste: Path | None,
+    output_dir: Path,
+) -> None:
+    ameise_map = load_ameise(ameise)
+    vermittler_map = load_vermittlerliste(vermittlerliste) if vermittlerliste else {}
     date_prefix = datetime.now().strftime("%Y%m%d")
 
     ods_fieldnames = [
@@ -706,7 +713,7 @@ def main() -> None:
     summary = Counter()
     missing_columns: Dict[str, List[str]] = {}
 
-    for insurer, paths in (("KRAVAG", args.kravag), ("R+V", args.rv)):
+    for insurer, paths in (("KRAVAG", kravag), ("R+V", rv)):
         for path in paths:
             matched, counts, missing_fields = match_insurer(insurer, path, ameise_map)
             all_rows.extend(matched)
@@ -717,7 +724,7 @@ def main() -> None:
                     if field not in missing_columns[insurer]:
                         missing_columns[insurer].append(field)
 
-    for path in args.vema:
+    for path in vema:
         matched, counts, missing_fields = match_vema(path, ameise_map)
         all_rows.extend(matched)
         summary.update(counts)
@@ -727,7 +734,7 @@ def main() -> None:
                 if field not in missing_columns["VEMA"]:
                     missing_columns["VEMA"].append(field)
 
-    for path in args.ff:
+    for path in ff:
         matched, counts, missing_fields = match_fonds_finanz(path, ameise_map)
         all_rows.extend(matched)
         summary.update(counts)
@@ -750,16 +757,16 @@ def main() -> None:
         for key in row.keys():
             if key not in fieldnames:
                 fieldnames.append(key)
-    write_csv(args.output_dir / "matched_rows.csv", fieldnames, all_rows)
+    write_csv(output_dir / "matched_rows.csv", fieldnames, all_rows)
     unmatched_rows = [row for row in all_rows if row.get("match_status") == "unmatched"]
-    write_csv(args.output_dir / "unmatched_rows.csv", fieldnames, unmatched_rows)
+    write_csv(output_dir / "unmatched_rows.csv", fieldnames, unmatched_rows)
 
     summary_rows = [
         {"VMT": vmt, "count": str(count)}
         for vmt, count in sorted(summary.items(), key=lambda item: item[0])
     ]
-    write_csv(args.output_dir / "summary_by_vmt.csv", ["VMT", "count"], summary_rows)
-    unmatched_ods = args.output_dir / "vmt" / f"{sanitize_filename('UNMATCHED')}.ods"
+    write_csv(output_dir / "summary_by_vmt.csv", ["VMT", "count"], summary_rows)
+    unmatched_ods = output_dir / "vmt" / f"{sanitize_filename('UNMATCHED')}.ods"
     if unmatched_ods.exists():
         unmatched_ods.unlink()
 
@@ -800,7 +807,7 @@ def main() -> None:
             total_row["Betrag"] = format_amount_display(total_amount)
             ods_rows.append(total_row)
         write_ods(
-            args.output_dir / "vmt" / f"{filename_base}.ods",
+            output_dir / "vmt" / f"{filename_base}.ods",
             vmt,
             ods_fieldnames,
             ods_rows,
@@ -808,11 +815,24 @@ def main() -> None:
             currency_fields=["Betrag"],
         )
         write_pdf(
-            args.output_dir / "vmt" / f"{filename_base}.pdf",
+            output_dir / "vmt" / f"{filename_base}.pdf",
             vmt,
             ods_fieldnames,
             ods_rows,
         )
+
+
+def main() -> None:
+    args = parse_args()
+    run_provision(
+        ameise=args.ameise,
+        kravag=args.kravag,
+        rv=args.rv,
+        vema=args.vema,
+        ff=args.ff,
+        vermittlerliste=args.vermittlerliste,
+        output_dir=args.output_dir,
+    )
 
 
 if __name__ == "__main__":
