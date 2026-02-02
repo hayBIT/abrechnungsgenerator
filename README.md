@@ -21,10 +21,10 @@ python provision.py \
 
 - `output/matched_rows.csv`: Alle Abrechnungszeilen mit angereicherter `VSN`, `VMT`, `match_status` und `insurer`.
 - `output/summary_by_vmt.csv`: Zusammenfassung der Treffer nach `VMT` (inklusive `UNMATCHED`).
-- `output/vmt/<VMT>.ods`: Je Vermittler eine ODS-Datei mit den Spalten `VSN`, `Vorname / Ansprechpartner`, `Nachname / Firma`, `Gesellschaft`, `Sparte`, `beg_wirk_dat`, `abrechnungsbetrag`.
+- `output/vmt/<VMT>.ods`: Je Vermittler eine ODS-Datei mit den Spalten `VSN`, `Vorname / Ansprechpartner`, `Nachname / Firma`, `Gesellschaft`, `Sparte`, `Datum`, `Betrag`.
 
 ## Hinweise
 
 - Das Skript erkennt das CSV-Trennzeichen automatisch.
 - Mindestens eine Abrechnung (`--kravag` oder `--rv`) muss übergeben werden (jeweils mit einem oder mehreren CSVs).
-- `Vorname / Ansprechpartner`, `Nachname / Firma`, `Gesellschaft` und `Sparte` stammen aus der Ameise-CSV; `abrechnungsbetrag` wird mit `€` ausgegeben.
+- `Vorname / Ansprechpartner`, `Nachname / Firma`, `Gesellschaft` und `Sparte` stammen aus der Ameise-CSV; `Betrag` wird mit `€` ausgegeben.
