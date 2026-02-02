@@ -637,6 +637,8 @@ def main() -> None:
         name_suffix = f"_{sanitize_filename(vermittler_name)}" if vermittler_name else ""
         filename = f"{date_prefix}_{sanitize_filename(vmt)}{name_suffix}.ods"
         ods_rows = []
+        total_amount = 0.0
+        has_amount = False
         for row in rows:
             ods_row = dict(row)
             date_display, _ = normalize_date(row.get("beg_wirk_dat", ""))
@@ -648,7 +650,16 @@ def main() -> None:
                 ods_row["Betrag"] = format_amount_display(amount)
             else:
                 ods_row["Betrag"] = row.get("abrechnungsbetrag", "")
+                amount = parse_amount_eur(ods_row["Betrag"])
+            if amount is not None:
+                total_amount += amount
+                has_amount = True
             ods_rows.append(ods_row)
+        if has_amount:
+            total_row = {field: "" for field in ods_fieldnames}
+            total_row["Nachname / Firma"] = "Summe"
+            total_row["Betrag"] = format_amount_display(total_amount)
+            ods_rows.append(total_row)
         write_ods(
             args.output_dir / "vmt" / filename,
             vmt,
