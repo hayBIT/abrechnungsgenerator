@@ -4,6 +4,7 @@ import csv
 import re
 import zipfile
 from collections import Counter
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 from xml.etree import ElementTree
@@ -158,8 +159,26 @@ def sanitize_filename(value: str) -> str:
     return cleaned or "UNMATCHED"
 
 
-def build_ods_content_xml(sheet_name: str, fieldnames: List[str], rows: List[Dict[str, str]]) -> str:
-    def cell(value: str) -> str:
+def build_ods_content_xml(
+    sheet_name: str,
+    fieldnames: List[str],
+    rows: List[Dict[str, str]],
+    date_fields: Iterable[str],
+) -> str:
+    date_field_set = {name for name in date_fields}
+
+    def cell(value: str, is_date: bool) -> str:
+        if is_date:
+            display, iso_value = normalize_date(value)
+            if iso_value:
+                escaped = escape(display)
+                return (
+                    "<table:table-cell table:style-name=\"DateCell\" office:value-type=\"date\" "
+                    f"office:date-value=\"{iso_value}\">"
+                    f"<text:p>{escaped}</text:p>"
+                    "</table:table-cell>"
+                )
+            value = display
         escaped = escape(value)
         return (
             "<table:table-cell office:value-type=\"string\">"
@@ -167,11 +186,13 @@ def build_ods_content_xml(sheet_name: str, fieldnames: List[str], rows: List[Dic
             "</table:table-cell>"
         )
 
-    header_cells = "".join(cell(name) for name in fieldnames)
+    header_cells = "".join(cell(name, False) for name in fieldnames)
     row_xml = f"<table:table-row>{header_cells}</table:table-row>"
     rows_xml = []
     for row in rows:
-        cells = "".join(cell(str(row.get(name, ""))) for name in fieldnames)
+        cells = "".join(
+            cell(str(row.get(name, "")), name in date_field_set) for name in fieldnames
+        )
         rows_xml.append(f"<table:table-row>{cells}</table:table-row>")
     table_rows = row_xml + "".join(rows_xml)
     return f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -179,7 +200,19 @@ def build_ods_content_xml(sheet_name: str, fieldnames: List[str], rows: List[Dic
     xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
     xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"
     xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+    xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"
+    xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0"
     office:version="1.2">
+  <office:automatic-styles>
+    <style:style style:name="DateCell" style:family="table-cell" style:data-style-name="date1"/>
+    <number:date-style style:name="date1" number:automatic-order="true">
+      <number:day number:style="long"/>
+      <number:text>.</number:text>
+      <number:month number:style="long"/>
+      <number:text>.</number:text>
+      <number:year number:style="long"/>
+    </number:date-style>
+  </office:automatic-styles>
   <office:body>
     <office:spreadsheet>
       <table:table table:name="{escape(sheet_name)}">
@@ -191,8 +224,14 @@ def build_ods_content_xml(sheet_name: str, fieldnames: List[str], rows: List[Dic
 """
 
 
-def write_ods(path: Path, sheet_name: str, fieldnames: List[str], rows: List[Dict[str, str]]) -> None:
-    content_xml = build_ods_content_xml(sheet_name, fieldnames, rows)
+def write_ods(
+    path: Path,
+    sheet_name: str,
+    fieldnames: List[str],
+    rows: List[Dict[str, str]],
+    date_fields: Iterable[str],
+) -> None:
+    content_xml = build_ods_content_xml(sheet_name, fieldnames, rows, date_fields)
     manifest_xml = """<?xml version="1.0" encoding="UTF-8"?>
 <manifest:manifest
     xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"
@@ -219,6 +258,49 @@ def format_amount_eur(value: str) -> str:
     if cleaned.endswith("€"):
         return cleaned
     return f"{cleaned} €"
+
+
+def normalize_date(value: str) -> Tuple[str, str]:
+    cleaned = value.strip()
+    if not cleaned:
+        return "", ""
+
+    candidates = [cleaned]
+    if "T" in cleaned:
+        candidates.append(cleaned.split("T", 1)[0])
+    if " " in cleaned:
+        candidates.append(cleaned.split(" ", 1)[0])
+
+    date_formats = [
+        "%d.%m.%Y",
+        "%d.%m.%y",
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%d/%m/%Y",
+        "%d/%m/%y",
+        "%m/%d/%Y",
+        "%m/%d/%y",
+    ]
+
+    for candidate in candidates:
+        for fmt in date_formats:
+            try:
+                parsed = datetime.strptime(candidate, fmt)
+            except ValueError:
+                continue
+            return parsed.strftime("%d.%m.%Y"), parsed.strftime("%Y-%m-%d")
+
+    if re.fullmatch(r"\d+(\.\d+)?", cleaned):
+        try:
+            serial = float(cleaned)
+        except ValueError:
+            serial = 0.0
+        if serial:
+            base_date = datetime(1899, 12, 30)
+            parsed = base_date + timedelta(days=serial)
+            return parsed.strftime("%d.%m.%Y"), parsed.strftime("%Y-%m-%d")
+
+    return cleaned, ""
 
 
 def match_insurer(
@@ -285,6 +367,7 @@ def match_vema(
         counts[vmt or "UNMATCHED"] += 1
         amount = format_amount_eur(row.get("Betrag", ""))
         enriched = dict(row)
+        date_display, _ = normalize_date(row.get("Fälligkeit", ""))
         enriched.update(
             {
                 "insurer": "VEMA",
@@ -295,7 +378,7 @@ def match_vema(
                 "Gesellschaft": ameise_details.get("Gesellschaft", ""),
                 "Sparte": ameise_details.get("Sparte", ""),
                 "abrechnungsbetrag": amount,
-                "beg_wirk_dat": row.get("Fälligkeit", ""),
+                "beg_wirk_dat": date_display or row.get("Fälligkeit", ""),
                 "Betrag": amount,
                 "match_status": status,
             }
@@ -328,6 +411,7 @@ def match_fonds_finanz(
         counts[vmt or "UNMATCHED"] += 1
         amount = format_amount_eur(row.get("Summe in EUR", ""))
         enriched = dict(row)
+        date_display, _ = normalize_date(row.get("Abrechnungsdatum", ""))
         enriched.update(
             {
                 "insurer": "Fonds Finanz",
@@ -338,7 +422,7 @@ def match_fonds_finanz(
                 "Gesellschaft": ameise_details.get("Gesellschaft", ""),
                 "Sparte": ameise_details.get("Sparte", ""),
                 "abrechnungsbetrag": amount,
-                "beg_wirk_dat": row.get("Abrechnungsdatum", ""),
+                "beg_wirk_dat": date_display or row.get("Abrechnungsdatum", ""),
                 "Summe in EUR": amount,
                 "match_status": status,
             }
@@ -463,10 +547,17 @@ def main() -> None:
         ods_rows = []
         for row in rows:
             ods_row = dict(row)
-            ods_row["Datum"] = row.get("beg_wirk_dat", "")
+            date_display, _ = normalize_date(row.get("beg_wirk_dat", ""))
+            ods_row["Datum"] = date_display or row.get("beg_wirk_dat", "")
             ods_row["Betrag"] = row.get("abrechnungsbetrag", "")
             ods_rows.append(ods_row)
-        write_ods(args.output_dir / "vmt" / filename, vmt, ods_fieldnames, ods_rows)
+        write_ods(
+            args.output_dir / "vmt" / filename,
+            vmt,
+            ods_fieldnames,
+            ods_rows,
+            date_fields=["Datum"],
+        )
 
 
 if __name__ == "__main__":
