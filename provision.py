@@ -209,8 +209,8 @@ def main() -> None:
         "Nachname / Firma",
         "Gesellschaft",
         "Sparte",
-        "beg_wirk_dat",
-        "abrechnungsbetrag",
+        "Datum",
+        "Betrag",
     ]
 
     all_rows: List[Dict[str, str]] = []
@@ -252,7 +252,13 @@ def main() -> None:
 
     for vmt, rows in rows_by_vmt.items():
         filename = f"{sanitize_filename(vmt)}.ods"
-        write_ods(args.output_dir / "vmt" / filename, vmt, ods_fieldnames, rows)
+        ods_rows = []
+        for row in rows:
+            ods_row = dict(row)
+            ods_row["Datum"] = row.get("beg_wirk_dat", "")
+            ods_row["Betrag"] = row.get("abrechnungsbetrag", "")
+            ods_rows.append(ods_row)
+        write_ods(args.output_dir / "vmt" / filename, vmt, ods_fieldnames, ods_rows)
 
 
 if __name__ == "__main__":
