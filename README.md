@@ -15,6 +15,7 @@ python provision.py \
   --kravag path/to/kravag_1.csv path/to/kravag_2.csv \
   --rv path/to/rv_1.csv path/to/rv_2.csv \
   --vema path/to/vema_1.csv \
+  --ff path/to/fonds_finanz.xlsx \
   --output-dir output
 ```
 
@@ -28,5 +29,5 @@ python provision.py \
 ## Hinweise
 
 - Das Skript erkennt das CSV-Trennzeichen automatisch.
-- Mindestens eine Abrechnung (`--kravag` oder `--rv`) muss übergeben werden (jeweils mit einem oder mehreren CSVs). `--vema` kann zusätzlich optional angegeben werden.
+- Mindestens eine Abrechnung (`--kravag` oder `--rv`) muss übergeben werden (jeweils mit einem oder mehreren CSVs). `--vema` (CSV) und `--ff` (XLSX) können zusätzlich optional angegeben werden.
 - `Vorname / Ansprechpartner`, `Nachname / Firma`, `Gesellschaft` und `Sparte` stammen aus der Ameise-CSV; `Betrag` wird mit `€` ausgegeben.
