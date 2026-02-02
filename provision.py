@@ -164,10 +164,12 @@ def build_ods_content_xml(
     fieldnames: List[str],
     rows: List[Dict[str, str]],
     date_fields: Iterable[str],
+    currency_fields: Iterable[str],
 ) -> str:
     date_field_set = {name for name in date_fields}
+    currency_field_set = {name for name in currency_fields}
 
-    def cell(value: str, is_date: bool) -> str:
+    def cell(value: str, is_date: bool, is_currency: bool) -> str:
         if is_date:
             display, iso_value = normalize_date(value)
             if iso_value:
@@ -179,6 +181,17 @@ def build_ods_content_xml(
                     "</table:table-cell>"
                 )
             value = display
+        if is_currency:
+            amount = parse_amount_eur(value)
+            if amount is not None:
+                escaped = escape(format_amount_display(amount))
+                return (
+                    "<table:table-cell table:style-name=\"CurrencyCell\" "
+                    "office:value-type=\"currency\" office:currency=\"EUR\" "
+                    f"office:value=\"{amount}\">"
+                    f"<text:p>{escaped}</text:p>"
+                    "</table:table-cell>"
+                )
         escaped = escape(value)
         return (
             "<table:table-cell office:value-type=\"string\">"
@@ -186,12 +199,17 @@ def build_ods_content_xml(
             "</table:table-cell>"
         )
 
-    header_cells = "".join(cell(name, False) for name in fieldnames)
+    header_cells = "".join(cell(name, False, False) for name in fieldnames)
     row_xml = f"<table:table-row>{header_cells}</table:table-row>"
     rows_xml = []
     for row in rows:
         cells = "".join(
-            cell(str(row.get(name, "")), name in date_field_set) for name in fieldnames
+            cell(
+                str(row.get(name, "")),
+                name in date_field_set,
+                name in currency_field_set,
+            )
+            for name in fieldnames
         )
         rows_xml.append(f"<table:table-row>{cells}</table:table-row>")
     table_rows = row_xml + "".join(rows_xml)
@@ -212,6 +230,12 @@ def build_ods_content_xml(
       <number:text>.</number:text>
       <number:year number:style="long"/>
     </number:date-style>
+    <style:style style:name="CurrencyCell" style:family="table-cell" style:data-style-name="currency1"/>
+    <number:currency-style style:name="currency1">
+      <number:number number:decimal-places="2" number:grouping="true" number:min-integer-digits="1"/>
+      <number:text> </number:text>
+      <number:currency-symbol>€</number:currency-symbol>
+    </number:currency-style>
   </office:automatic-styles>
   <office:body>
     <office:spreadsheet>
@@ -230,8 +254,11 @@ def write_ods(
     fieldnames: List[str],
     rows: List[Dict[str, str]],
     date_fields: Iterable[str],
+    currency_fields: Iterable[str],
 ) -> None:
-    content_xml = build_ods_content_xml(sheet_name, fieldnames, rows, date_fields)
+    content_xml = build_ods_content_xml(
+        sheet_name, fieldnames, rows, date_fields, currency_fields
+    )
     manifest_xml = """<?xml version="1.0" encoding="UTF-8"?>
 <manifest:manifest
     xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"
@@ -258,6 +285,27 @@ def format_amount_eur(value: str) -> str:
     if cleaned.endswith("€"):
         return cleaned
     return f"{cleaned} €"
+
+
+def parse_amount_eur(value: str) -> float | None:
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    cleaned = cleaned.replace("€", "").replace("\u00a0", "").replace(" ", "")
+    if cleaned.count(",") == 1 and "." in cleaned:
+        cleaned = cleaned.replace(".", "").replace(",", ".")
+    elif cleaned.count(",") == 1 and "." not in cleaned:
+        cleaned = cleaned.replace(",", ".")
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def format_amount_display(amount: float) -> str:
+    formatted = f"{amount:,.2f}"
+    formatted = formatted.replace(",", "_").replace(".", ",").replace("_", ".")
+    return f"{formatted} €"
 
 
 def normalize_date(value: str) -> Tuple[str, str]:
@@ -557,6 +605,7 @@ def main() -> None:
             ods_fieldnames,
             ods_rows,
             date_fields=["Datum"],
+            currency_fields=["Betrag"],
         )
 
 
